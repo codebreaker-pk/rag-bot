@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+openai>=1.51.0
+chromadb>=0.5.5
+tiktoken
+pypdf
+python-docx
+pydantic>=2.8
+numpy

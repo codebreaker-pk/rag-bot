@@ -1,0 +1,32 @@
+# --- Python / FastAPI ---
+*.pyc
+__pycache__/
+*.pyd
+*.so
+*.dll
+*.lib
+.venv/
+backend/.venv/
+*.log
+**/.cache/
+
+# --- Chroma / vector DB ---
+backend/vectorstore/
+backend/backend/vectorstore/
+**/chroma.sqlite3
+
+# --- Data (keep folder, ignore large docs in repo) ---
+backend/data/*
+!backend/data/.gitkeep
+
+# --- Env files (secrets) ---
+backend/.env
+frontend/.env
+
+# --- Node / Vite ---
+node_modules/
+frontend/dist/
+
+# --- OS ---
+.DS_Store
+Thumbs.db
