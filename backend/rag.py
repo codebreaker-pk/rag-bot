@@ -116,12 +116,24 @@ def search(query: str, k: int = 5, domain_filter: Optional[str] = None):
         })
     return hits
 
+
+def _count_where(where=None) -> int:
+    try:
+        out = collection.get(where=where)  # returns dict with "ids"
+        return len(out.get("ids", []))
+    except Exception:
+        return 0
+        
 def collection_stats():
-    try: nec = collection.count(where={"domain": "nec"})
-    except Exception: nec = 0
-    try: wm  = collection.count(where={"domain": "wattmonk"})
-    except Exception: wm = 0
-    return {"total": nec + wm, "nec_count": nec, "wattmonk_count": wm, "nec_samples": {}, "wattmonk_samples": {}}
+    nec = _count_where({"domain": "nec"})
+    wm  = _count_where({"domain": "wattmonk"})
+    return {
+        "total": nec + wm,
+        "nec_count": nec,
+        "wattmonk_count": wm,
+        "nec_samples": {},
+        "wattmonk_samples": {},
+    }
 
 def confidence_from_hits(hits: List[Dict]):
     if not hits:
