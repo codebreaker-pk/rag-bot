@@ -1,5 +1,26 @@
 # RAG Bot (Beginner-Friendly, Business-Ready)
 
+
+> 📌 Live Demo Frontend: https://rag-bot-five.vercel.app/  
+> 🛠️ Backend API: https://rag-bot-0qow.onrender.com
+
+---
+
+## Overview
+
+Business RAG Bot is a **Retrieval-Augmented Generation (RAG)** chatbot focused on two domains: **NEC** (National Electrical Code) and **Wattmonk**.  
+It can answer domain questions with **context citations**, small talk in “general” mode, and gracefully fallback if information is missing.
+
+**Key features:**
+- Ingests PDF / DOCX / TXT documents and indexes them in vector store  
+- Domain classification (automatic or manual)  
+- Citations: answers include `[1], [2]` style linking to source chunks  
+- Confidence scoring  
+- Two deployment parts:  
+  - Backend with FastAPI + Chroma + Gemini embeddings  
+  - Frontend with React, Vite, Material-UI  
+
+---
 ## Quick Start (Windows or Linux)
 1. **Backend**
    ```bash
