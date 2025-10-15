@@ -8,21 +8,19 @@ import chromadb
 from tiktoken import get_encoding
 from utils import get_env
 
-# ====== Config ======
-PROVIDER = get_env("PROVIDER", "gemini").lower()          # gemini | openai | groq
+# ================= Config =================
+PROVIDER = get_env("PROVIDER", "gemini").lower()
 GEMINI_MODEL = get_env("GEMINI_MODEL", "gemini-2.5-flash")
 
-# Embeddings: use Gemini to avoid Torch memory
-EMBED_BACKEND = get_env("EMBED_BACKEND", "gemini").lower()  # gemini | sbert (sbert not recommended on Render free)
-GEM_EMBED_MODEL = get_env("GEMINI_EMBED_MODEL", "text-embedding-004")  # will fallback automatically
-SBERT_MODEL   = get_env("SBERT_MODEL", "all-MiniLM-L6-v2")  # unused if EMBED_BACKEND=gemini
-
+# Embeddings: keep it light on Render free tier
+EMBED_BACKEND = get_env("EMBED_BACKEND", "gemini").lower()  # gemini | sbert (avoid sbert on 512MB)
+GEMINI_EMBED_MODEL = get_env("GEMINI_EMBED_MODEL", "text-embedding-004")
 DUMMY = get_env("DUMMY_MODE", "false").lower() == "true"
 
-BASE_DIR   = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parent
 VSTORE_DIR = BASE_DIR / "vectorstore"
 
-# ====== Tokenizer / Chunking ======
+# ================= Chunking =================
 try:
     enc = get_encoding("cl100k_base")
 except Exception:
@@ -44,7 +42,7 @@ def chunk(text: str, max_tokens: int = 400, overlap: int = 80) -> List[str]:
             out.append(piece)
     return out
 
-# ====== Chroma (cosine space) ======
+# ================= Chroma (cosine) =================
 VSTORE_DIR.mkdir(parents=True, exist_ok=True)
 chroma = chromadb.PersistentClient(path=str(VSTORE_DIR))
 collection = chroma.get_or_create_collection(
@@ -52,9 +50,7 @@ collection = chroma.get_or_create_collection(
     metadata={"hnsw:space": "cosine"},
 )
 
-# ====== Embeddings ======
-_sbert = None  # only if you ever switch to sbert
-
+# ================= Embeddings =================
 def _gemini_embed(texts: List[str]) -> List[List[float]]:
     import google.generativeai as genai
     api_key = get_env("GEMINI_API_KEY", "")
@@ -65,44 +61,27 @@ def _gemini_embed(texts: List[str]) -> List[List[float]]:
     def _call(model_name: str, ts: List[str]) -> List[List[float]]:
         vecs = []
         for t in ts:
-            # SDK returns object with .embedding OR dict with 'embedding'
             resp = genai.embed_content(model=model_name, content=t or "")
             emb = getattr(resp, "embedding", None)
             if emb is None and isinstance(resp, dict):
                 emb = resp.get("embedding")
             if not emb:
-                emb = [0.0] * 768  # safe fallback length
+                emb = [0.0] * 768
             vecs.append(list(emb))
         return vecs
 
     try:
-        return _call(GEM_EMBED_MODEL, texts)
+        return _call(GEMINI_EMBED_MODEL, texts)
     except Exception:
-        # broad fallback to widely available model
-        try:
-            return _call("embedding-gecko-001", texts)
-        except Exception as e:
-            raise RuntimeError(f"Gemini embeddings failed: {e}") from e
-
-def _get_sbert():
-    # Not recommended on Render free (Torch memory). Kept for local/dev only.
-    global _sbert
-    if _sbert is None:
-        from sentence_transformers import SentenceTransformer
-        _sbert = SentenceTransformer(SBERT_MODEL)
-    return _sbert
+        return _call("embedding-gecko-001", texts)
 
 def embed_texts(texts: List[str]) -> List[List[float]]:
     if DUMMY:
-        return [[0.0] * 512 for _ in texts]
-    if EMBED_BACKEND == "gemini":
-        return _gemini_embed(texts)
-    # sbert branch (avoid on Render free)
-    model = _get_sbert()
-    embs = model.encode(texts, normalize_embeddings=True)
-    return [e.tolist() if hasattr(e, "tolist") else list(e) for e in embs]
+        return [[0.0] * 256 for _ in texts]
+    # Only Gemini path enabled for Render
+    return _gemini_embed(texts)
 
-# ====== Vector ops ======
+# ================= Vector ops =================
 def add_docs(domain: str, docs: List[Dict]):
     if not docs:
         return
@@ -144,7 +123,6 @@ def collection_stats():
     except Exception: wm = 0
     return {"total": nec + wm, "nec_count": nec, "wattmonk_count": wm, "nec_samples": {}, "wattmonk_samples": {}}
 
-# ====== Confidence ======
 def confidence_from_hits(hits: List[Dict]):
     if not hits:
         return 0.2
@@ -159,29 +137,27 @@ def confidence_from_hits(hits: List[Dict]):
     sim = float(math.exp(-float(np.mean(ds))))
     return max(0.3, min(0.95, sim))
 
-# ====== LLM (Gemini) ======
+# ================= LLM (Gemini) =================
 _gem_model = None
 def _gemini_gen(prompt: str) -> str:
     global _gem_model
+    import google.generativeai as genai
+    api_key = get_env("GEMINI_API_KEY", "")
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY not set")
+    genai.configure(api_key=api_key)
     if _gem_model is None:
-        import google.generativeai as genai
-        api_key = get_env("GEMINI_API_KEY", "")
-        if not api_key:
-            raise RuntimeError("GEMINI_API_KEY not set")
-        genai.configure(api_key=api_key)
         _gem_model = genai.GenerativeModel(GEMINI_MODEL)
     resp = _gem_model.generate_content(prompt)
     return (getattr(resp, "text", None) or "").strip()
 
 def _llm(prompt: str) -> str:
     if DUMMY:
-        if "Classify user intent" in prompt or "Return only the label" in prompt:
-            return "general"
-    if PROVIDER == "gemini":
-        return _gemini_gen(prompt)
-    return "Model unavailable: set PROVIDER=gemini with GEMINI_API_KEY."
+        # simple canned response for tests
+        return "Hello! How can I help you today?"
+    return _gemini_gen(prompt)
 
-# ====== Prompts ======
+# ================= Prompting =================
 def _format_history(history: List[Dict]) -> str:
     return "\n".join(f'{h.get("role","user").capitalize()}: {h.get("content","")}' for h in history[-6:])
 
@@ -193,11 +169,10 @@ def build_prompt(message: str, ctx: List[Dict], history: List[Dict]):
         ctx_text += f"\n[{i}] {c.get('text','')}\n"
     sys = (
         "You are a precise business assistant.\n"
-        "Rules:\n"
-        "1) For NEC/Wattmonk questions, use ONLY the provided Context.\n"
-        "2) If unsure, say you don't have that info and suggest next steps.\n"
-        "3) Always include inline citations like [#] matching Context chunks.\n"
-        "4) Be concise and clear."
+        "Use ONLY the provided Context for domain questions (NEC/Wattmonk).\n"
+        "If unsure, say you don't have that info and suggest next steps.\n"
+        "Always include inline citations like [#] matching Context.\n"
+        "Be concise and clear."
     )
     hist_txt = _format_history(history)
     user = (
@@ -223,13 +198,5 @@ def classify_intent(message: str) -> str:
         return "wattmonk"
     if any(k in m for k in ["nec", "grounded", "conductor", "article", "national electrical code"]):
         return "nec"
-    prompt = (
-        "Classify user intent as one of exactly: nec, wattmonk, general.\n"
-        "Output only the single lowercase label.\n\n"
-        f"Message: {message}\nLabel:"
-    )
-    try:
-        lab = (_llm(prompt) or "").strip().lower()
-        return lab if lab in {"nec","wattmonk","general"} else "general"
-    except Exception:
-        return "general"
+    # fallback classification via LLM (optional)
+    return "general"
