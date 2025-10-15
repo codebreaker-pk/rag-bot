@@ -3,13 +3,15 @@ from __future__ import annotations
 from pathlib import Path
 import math
 from typing import Optional, List, Dict
+from io import BytesIO
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from models import ChatRequest, ChatResponse
 from utils import get_env, new_session
-from ingest import load_and_ingest
+from ingest import load_and_ingest, extract_text_from_bytes
 from rag import (
     search as rag_search,
     generate,
@@ -17,67 +19,105 @@ from rag import (
     classify_intent,
     confidence_from_hits,
     collection_stats,
+    add_docs,
+    chunk,
 )
 
-# -----------------------------
-# Paths
-# -----------------------------
-BASE_DIR = Path(__file__).resolve().parent          # .../rag-bot/backend
-DATA_DIR = BASE_DIR / "data"                        # .../rag-bot/backend/data
+# -------- Paths --------
+BASE_DIR = Path(__file__).resolve().parent
+DATA_DIR = BASE_DIR / "data"
 
-# -----------------------------
-# FastAPI app
-# -----------------------------
+# -------- App --------
 app = FastAPI(title="Business RAG Bot", version="1.0.0")
 
-# -----------------------------
-# CORS (beginner-safe)
-# -----------------------------
-def _parse_origins(val: str) -> tuple[list[str], bool]:
-    """
-    Returns (origins_list, allow_credentials_flag).
-    If "*" -> credentials must be False (browser spec).
-    """
+# -------- CORS --------
+def _parse_origins(val: str):
     if not val or val.strip() == "*":
         return ["*"], False
     items = [x.strip() for x in val.split(",") if x.strip()]
     return items or ["*"], True
 
-_raw_origins = get_env("CORS_ORIGINS", "http://localhost:5173")
-_allow_list, _creds = _parse_origins(_raw_origins)
+_raw = get_env("CORS_ORIGINS", "*")
+_allow, _creds = _parse_origins(_raw)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_allow_list,
+    allow_origins=_allow,
     allow_credentials=_creds,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# -----------------------------
-# Simple in-memory chat history
-# -----------------------------
-MEM: dict[str, List[Dict[str, str]]] = {}
+# -------- Memory --------
+MEM: Dict[str, List[Dict[str, str]]] = {}
 
-# -----------------------------
-# Health
-# -----------------------------
+# -------- Health --------
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
-# -----------------------------
-# Ingest (reads data/nec and data/wattmonk)
-# -----------------------------
+# -------- Debug: which files exist on server --------
+@app.get("/debug/files")
+def debug_files():
+    def _ls(d: Path):
+        if not d.exists():
+            return {"exists": False, "count": 0, "files": []}
+        files = [p.name for p in d.iterdir() if p.is_file()]
+        return {"exists": True, "count": len(files), "files": files[:50]}
+    return {
+        "nec": _ls(DATA_DIR / "nec"),
+        "wattmonk": _ls(DATA_DIR / "wattmonk"),
+        "cwd": str(BASE_DIR),
+    }
+
+# -------- Ingest (crash-proof) --------
 @app.post("/ingest")
 def ingest():
-    load_and_ingest("nec", str(DATA_DIR / "nec"))
-    load_and_ingest("wattmonk", str(DATA_DIR / "wattmonk"))
-    return {"status": "ingested"}
+    nec_dir = DATA_DIR / "nec"
+    wm_dir  = DATA_DIR / "wattmonk"
 
-# -----------------------------
-# Small helper utilities
-# -----------------------------
+    result = {"status": "", "nec": None, "wattmonk": None}
+
+    any_loaded = False
+    if nec_dir.exists():
+        res_nec = load_and_ingest("nec", str(nec_dir))
+        result["nec"] = res_nec
+        any_loaded = any_loaded or (res_nec["files_indexed"] > 0)
+
+    if wm_dir.exists():
+        res_wm = load_and_ingest("wattmonk", str(wm_dir))
+        result["wattmonk"] = res_wm
+        any_loaded = any_loaded or (res_wm["files_indexed"] > 0)
+
+    result["status"] = "ingested" if any_loaded else "no_data"
+    if not any_loaded:
+        result["hint"] = "Place files under backend/data/{nec|wattmonk} or use /upload"
+    return result
+
+# -------- Upload (direct file -> vector store) --------
+@app.post("/upload")
+async def upload(domain: str = Form(...), file: UploadFile = File(...)):
+    domain = (domain or "").lower().strip()
+    if domain not in {"nec", "wattmonk"}:
+        raise HTTPException(status_code=400, detail="domain must be 'nec' or 'wattmonk'")
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="empty file")
+    text = extract_text_from_bytes(file.filename or "upload", data)
+    if not text.strip():
+        raise HTTPException(status_code=400, detail="No text extracted (unsupported or empty)")
+
+    pieces = chunk(text)
+    docs = [{
+        "id": f"{domain}:{file.filename}:{i}",
+        "title": file.filename,
+        "source": f"upload/{file.filename}",
+        "text": piece
+    } for i, piece in enumerate(pieces)]
+    add_docs(domain, docs)
+    return {"status": "ok", "domain": domain, "filename": file.filename, "chunks": len(docs)}
+
+# -------- Smalltalk helper --------
 def is_smalltalk(text: str) -> bool:
     if not text:
         return True
@@ -88,74 +128,50 @@ def is_smalltalk(text: str) -> bool:
     return short or any(qs == g or qs.startswith(g) for g in greetings)
 
 def _sim_from_dist(d) -> float | None:
-    """Distance -> similarity mapping; robust for cosine/L2."""
     try:
         if d is None:
             return None
         d = float(d)
-        # exp(-d) gives pleasant 0..1 curve for distances
         return max(0.05, min(0.95, float(math.exp(-d))))
     except (TypeError, ValueError):
         return None
 
-# -----------------------------
-# Chat
-# -----------------------------
+# -------- Chat --------
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest):
-    # session
     sid = req.session_id or new_session()
     history = MEM.get(sid, [])
 
-    # auto or explicit domain
     domain = req.domain if req.domain != "auto" else classify_intent(req.message)
 
-    # retrieve & generate
     hits = []
     if domain in ["nec", "wattmonk"] and not is_smalltalk(req.message):
         hits = rag_search(req.message, k=5, domain_filter=domain)
         answer = generate(req.message, hits, history)
         conf = confidence_from_hits(hits)
     else:
-        # smalltalk / general Qs
         answer = generate_general(req.message, history)
         conf = 0.5
 
-    # pack sources (top-3 scored)
     sources = []
     for i, h in enumerate(hits):
         s = _sim_from_dist(h.get("dist"))
         if s is None:
-            # fallback descending
             s = max(0.35, 0.85 - 0.15 * i)
-        sources.append({
-            "title": h["meta"]["title"],
-            "doc_id": h["id"],
-            "score": s,
-        })
+        sources.append({"title": h["meta"]["title"], "doc_id": h["id"], "score": s})
 
-    # update memory
     history.append({"role": "user", "content": req.message})
     history.append({"role": "assistant", "content": answer})
-    MEM[sid] = history[-12:]  # keep last 12 messages
+    MEM[sid] = history[-12:]
 
-    return ChatResponse(
-        answer=answer,
-        sources=sources,
-        confidence=conf,
-        session_id=sid,
-    )
+    return ChatResponse(answer=answer, sources=sources, confidence=conf, session_id=sid)
 
-# -----------------------------
-# Stats
-# -----------------------------
+# -------- Stats --------
 @app.get("/stats")
 def stats():
     return collection_stats()
 
-# -----------------------------
-# Debug: search top-5
-# -----------------------------
+# -------- Debug search --------
 @app.get("/debug/search")
 def debug_search(q: str = Query(...), domain: Optional[str] = None):
     hits = rag_search(q, k=5, domain_filter=domain)
