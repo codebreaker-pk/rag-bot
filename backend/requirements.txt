@@ -1,12 +1,11 @@
 fastapi
 uvicorn[standard]
-chromadb
+chromadb==1.1.1
 numpy
 tiktoken
 python-dotenv
 pydantic
 google-generativeai
-sentence-transformers
 pypdf
-python-multipart
 python-docx
+python-multipart
