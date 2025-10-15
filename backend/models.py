@@ -1,12 +1,10 @@
-from pydantic import BaseModel, Field
-from typing import List, Optional, Literal
-
-Domain = Literal["nec", "wattmonk", "general", "auto"]
+from typing import Optional, List
+from pydantic import BaseModel
 
 class ChatRequest(BaseModel):
     message: str
     session_id: Optional[str] = None
-    domain: Domain = "auto"
+    domain: str = "auto"  # "auto" | "nec" | "wattmonk" | "general"
 
 class Source(BaseModel):
     title: str
@@ -15,6 +13,6 @@ class Source(BaseModel):
 
 class ChatResponse(BaseModel):
     answer: str
-    sources: List[Source] = Field(default_factory=list)
-    confidence: float = 0.0
+    sources: List[Source]
+    confidence: float
     session_id: str
