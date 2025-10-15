@@ -7,7 +7,7 @@ from rag import chunk, add_docs
 
 SUPPORTED = {".pdf", ".docx", ".txt"}
 
-def _read_text_from_file(fp: Path, max_pdf_pages: int = 20) -> str:
+def _read_text_from_file(fp: Path, max_pdf_pages: int = None) -> str:
     """Safe readers; never raise to caller."""
     ext = fp.suffix.lower()
     try:
@@ -33,7 +33,7 @@ def _read_text_from_file(fp: Path, max_pdf_pages: int = 20) -> str:
     except Exception:
         return ""
 
-def extract_text_from_bytes(filename: str, data: bytes, max_pdf_pages: int = 20) -> str:
+def extract_text_from_bytes(filename: str, data: bytes, max_pdf_pages: int = None) -> str:
     ext = (filename or "").lower()
     try:
         if ext.endswith(".pdf"):
