@@ -34,7 +34,9 @@ It can answer domain questions with **context citations**, small talk in “gene
    ```
    In another terminal:
    ```bash
-   curl -X POST http://localhost:8000/ingest
+   Invoke-RestMethod -Uri http://localhost:8000/ingest -Method POST
+   Invoke-RestMethod -Uri http://localhost:8000/stats
+   Invoke-RestMethod -Uri http://localhost:8000/chat -Method POST -ContentType 'application/json' -Body '{"message":"hello"}'
    ```
 
 2. **Frontend**
