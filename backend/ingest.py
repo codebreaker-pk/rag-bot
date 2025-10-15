@@ -1,84 +1,102 @@
-import os
+from __future__ import annotations
 from pathlib import Path
-from pypdf import PdfReader
-import docx
+from io import BytesIO
+from typing import Dict, List, Tuple
+
 from rag import chunk, add_docs
 
-SUPPORTED_EXTS = {".pdf", ".docx", ".txt"}
+SUPPORTED = {".pdf", ".docx", ".txt"}
 
-def read_pdf(path: str) -> str:
+def _read_text_from_file(fp: Path, max_pdf_pages: int = 20) -> str:
+    """Safe readers; never raise to caller."""
+    ext = fp.suffix.lower()
     try:
-        reader = PdfReader(path)
-        return "\n".join((p.extract_text() or "") for p in reader.pages)
-    except Exception as e:
-        print(f"[WARN] Failed to read PDF {path}: {e}")
+        if ext == ".pdf":
+            from pypdf import PdfReader
+            text = ""
+            with fp.open("rb") as f:
+                reader = PdfReader(f)
+                for p in reader.pages[:max_pdf_pages]:
+                    try:
+                        text += (p.extract_text() or "") + "\n"
+                    except Exception:
+                        pass
+            return text
+        elif ext == ".docx":
+            from docx import Document
+            doc = Document(str(fp))
+            return "\n".join(par.text for par in doc.paragraphs)
+        elif ext == ".txt":
+            return fp.read_text(encoding="utf-8", errors="ignore")
+        else:
+            return ""
+    except Exception:
         return ""
 
-def read_docx(path: str) -> str:
+def extract_text_from_bytes(filename: str, data: bytes, max_pdf_pages: int = 20) -> str:
+    ext = (filename or "").lower()
     try:
-        d = docx.Document(path)
-        return "\n".join(p.text for p in d.paragraphs)
-    except Exception as e:
-        print(f"[WARN] Failed to read DOCX {path}: {e}")
+        if ext.endswith(".pdf"):
+            from pypdf import PdfReader
+            text = ""
+            reader = PdfReader(BytesIO(data))
+            for p in reader.pages[:max_pdf_pages]:
+                try:
+                    text += (p.extract_text() or "") + "\n"
+                except Exception:
+                    pass
+            return text
+        elif ext.endswith(".docx"):
+            from docx import Document
+            doc = Document(BytesIO(data))
+            return "\n".join(par.text for par in doc.paragraphs)
+        elif ext.endswith(".txt"):
+            return data.decode("utf-8", errors="ignore")
+        else:
+            return ""
+    except Exception:
         return ""
 
-def read_txt(path: str) -> str:
-    try:
-        return Path(path).read_text(encoding="utf-8", errors="ignore")
-    except Exception as e:
-        print(f"[WARN] Failed to read TXT {path}: {e}")
-        return ""
+def load_and_ingest(domain: str, dirpath: str) -> Dict:
+    """
+    Ingest all supported files under dirpath into vector store, in small batches.
+    Returns stats dict (never raises).
+    """
+    d = Path(dirpath)
+    stats = {"domain": domain, "files_indexed": 0, "chunks_indexed": 0, "errors": []}
+    if not d.exists():
+        return stats
 
-def load_and_ingest(domain: str, folder: str):
-    folder_path = Path(folder)
-    if not folder_path.exists():
-        print(f"[ERROR] Folder not found: {folder}")
-        return
+    files = [p for p in d.rglob("*") if p.is_file() and p.suffix.lower() in SUPPORTED]
 
-    docs = []
-    file_count = 0
+    for fp in files:
+        text = _read_text_from_file(fp)
+        if not text.strip():
+            stats["errors"].append({"file": fp.name, "error": "no text extracted"})
+            continue
 
-    for root, _, files in os.walk(folder_path):
-        for f in files:
-            ext = Path(f).suffix.lower()
-            if ext not in SUPPORTED_EXTS:
-                continue
+        pieces = chunk(text)
+        if not pieces:
+            stats["errors"].append({"file": fp.name, "error": "no chunks"})
+            continue
 
-            file_path = os.path.join(root, f)
-            file_count += 1
+        docs = [{
+            "id": f"{domain}:{fp.name}:{i}",
+            "title": fp.name,
+            "source": f"{domain}/{fp.name}",
+            "text": piece
+        } for i, piece in enumerate(pieces)]
 
-            if ext == ".pdf":
-                text = read_pdf(file_path)
-            elif ext == ".docx":
-                text = read_docx(file_path)
-            elif ext == ".txt":
-                text = read_txt(file_path)
-            else:
-                continue
+        BATCH = 64
+        for i in range(0, len(docs), BATCH):
+            batch = docs[i:i+BATCH]
+            try:
+                add_docs(domain, batch)
+                stats["chunks_indexed"] += len(batch)
+            except Exception as e:
+                stats["errors"].append({"file": fp.name, "error": f"add_docs failed: {e}"})
+                break
 
-            if not text.strip():
-                print(f"[INFO] Skipping empty file: {file_path}")
-                continue
+        stats["files_indexed"] += 1
 
-            for idx, ck in enumerate(chunk(text)):
-                docs.append({
-                    "id": f"{domain}:{f}:{idx}",
-                    "text": ck,
-                    "title": f,
-                    "source": file_path
-                })
-
-    if not docs:
-        print(f"[INFO] No valid documents found in {folder}")
-        return
-
-    # Batch upload to avoid huge payloads
-    BATCH = 64
-    for i in range(0, len(docs), BATCH):
-        batch = docs[i:i+BATCH]
-        try:
-            add_docs(domain, batch)
-        except Exception as e:
-            print(f"[ERROR] Failed to add_docs for batch {i // BATCH}: {e}")
-
-    print(f"[DONE] Indexed {len(docs)} chunks from {file_count} files in '{folder}'")
+    return stats
