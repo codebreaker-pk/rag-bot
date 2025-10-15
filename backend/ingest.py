@@ -67,8 +67,7 @@ def load_and_ingest(domain: str, dirpath: str) -> Dict:
     if not d.exists():
         return stats
 
-    files = [p for p in d.rglob("*") if p.is_file() and p.suffix.lower() in SUPPORTED]
-
+    files = [p for p in d.iterdir() if p.is_file() and p.suffix.lower() in SUPPORTED]
     for fp in files:
         text = _read_text_from_file(fp)
         if not text.strip():
