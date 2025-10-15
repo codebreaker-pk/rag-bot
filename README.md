@@ -7,16 +7,15 @@ This project focusing on the development of a **Retrieval-Augmented Generation (
 > * **Frontend Application:** `https://rag-bot-five.vercel.app/`
 > * **Backend API:** `https://rag-bot-0qow.onrender.com`
 
-## Table of Contents
+## 📸 Screenshots
 
-1.  [**Project Overview**](#-project-overview)
-2.  [**Features Checklist**](#-features-checklist)
-3.  [**Architecture & Tech Stack**](#️-architecture--tech-stack)
-4.  [**System Design Diagram**](#-system-design-diagram)
-5.  [**Local Setup & Installation**](#️-local-setup--installation)
-6.  [**Usage Guide**](#-usage-guide)
-7.  [**Deployment**](#-deployment)
-8.  [**Project Structure**](#-project-structure)
+Here's a look at our application in action!
+
+![App Login Page](frontend/screenshot/img1.png)
+
+
+![User Dashboard](frontend/screenshot/img2.png)
+
 
 ## 📋 Project Overview
 
@@ -155,20 +154,6 @@ To populate the vector database, place your PDF, DOCX, or TXT files into the `ba
 curl -X POST http://localhost:8000/ingest
 ```
 
-## 📖 Usage Guide
-
-* **Sending a Query**: Type your question in the input box and press Enter.
-* **Context Selection**: The chatbot automatically classifies the intent. You can also manually select a context (NEC, Wattmonk, or General) from the UI.
-* **Source Citations**: When an answer is generated from a document, bracketed numbers like `[1]` will appear. Clicking these reveals the specific text chunk from the source document used to generate the answer.
-
-## 🚀 Deployment
-
-The application has been successfully deployed and is publicly accessible.
-
-* **Frontend (Vercel)**: The React application is deployed on Vercel, which provides CI/CD directly from the GitHub repository's `frontend` directory.
-* **Backend (Render)**: The FastAPI application is deployed on Render. API keys and other secrets are securely configured as environment variables in the Render dashboard to prevent exposure.
-
-
 
 ## 📁 Project Structure
 ```
@@ -191,3 +176,19 @@ RAG-Based-Chatbot/
 ├── package.json     # Node.js dependencies
 └── vite.config.js   # Vite configuration
 ```
+## 📖 Usage Guide
+
+* **Sending a Query**: Type your question in the input box and press Enter.
+* **Context Selection**: The chatbot automatically classifies the intent. You can also manually select a context (NEC, Wattmonk, or General) from the UI.
+* **Source Citations**: When an answer is generated from a document, bracketed numbers like `[1]` will appear. Clicking these reveals the specific text chunk from the source document used to generate the answer.
+
+## 🚀 Deployment
+
+The application has been successfully deployed and is publicly accessible.
+
+* **Frontend (Vercel)**: The React application is deployed on Vercel, which provides CI/CD directly from the GitHub repository's `frontend` directory.
+* **Backend (Render)**: The FastAPI application is deployed on Render. API keys and other secrets are securely configured as environment variables in the Render dashboard to prevent exposure.
+
+
+
+
